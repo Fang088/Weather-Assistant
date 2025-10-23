@@ -1,0 +1,19 @@
+# LangChain 核心库
+langchain>=0.1.0
+langchain-core>=0.1.0
+langchain-openai>=0.0.5
+
+# 数据库
+pymysql>=1.1.0
+
+# 配置管理
+python-dotenv>=1.0.0
+
+# 数据验证
+pydantic>=2.0.0
+
+# HTTP 请求（保留以备将来扩展）
+requests>=2.31.0
+
+# 日志（Python内置，无需安装）
+# logging
