@@ -39,12 +39,13 @@ class DialogueService:
         self.weather_tool = Weather_Service.create_weather_tool()
         if not self.weather_tool:
             logger.error("天气工具初始化失败，对话服务将无法提供天气查询功能。")
-            self.tools = []
+            raise RuntimeError("WeatherTool 初始化失败，无法启动服务")
         else:
             self.tools = [self.weather_tool]
+            logger.info("WeatherTool 初始化成功")
 
         # 设置系统提示词
-        self.system_prompt = "你是一个可以实时查询天气的AI助手。当用户询问天气时，使用提供的工具获取最新信息，并在气温后面加上℃让回答更美观，以及"
+        self.system_prompt = "你是一个可以实时查询天气的AI助手。当用户询问天气时，使用提供的工具获取最新信息，并在气温后面加上℃让回答更美观。"
 
         # 创建 Prompt Template
         # MessagesPlaceholder 用于动态插入聊天历史和Agent的思考过程
@@ -98,22 +99,53 @@ class DialogueService:
 
 # 示例用法
 if __name__ == "__main__":
+    print("=" * 50)
+    print("AI天气助手已启动")
+    print("输入 'exit' 或 'quit' 退出")
+    print("输入 'clear' 清除对话历史")
+    print("=" * 50)
+    print()
 
-    dialogue_service = DialogueService()
+    try:
+        dialogue_service = DialogueService()
+    except RuntimeError as e:
+        logger.error(f"服务启动失败: {e}")
+        print(f"\n❌ 启动失败: {e}")
+        print("请检查:")
+        print("1. 数据库是否正常连接")
+        print("2. .env 配置是否正确")
+        print("3. 依赖是否完整安装")
+        exit(1)
 
     # 模拟对话历史
     chat_history = []
 
-    print("AI天气助手已启动。输入 'exit' 退出。")
-
     while True:
-        user_query = input("你: ")
-        if user_query.lower() == 'exit':
+        try:
+            user_query = input("\n你: ")
+
+            if not user_query.strip():
+                continue
+
+            if user_query.lower() in ['exit', 'quit']:
+                print("\n再见！")
+                break
+
+            if user_query.lower() == 'clear':
+                chat_history = []
+                print("对话历史已清除。")
+                continue
+
+            ai_response = dialogue_service.run_conversation(user_query, chat_history)
+            print(f"\nAI: {ai_response}")
+
+            # 更新对话历史
+            chat_history.append((user_query, ai_response))
+
+        except KeyboardInterrupt:
+            print("\n\n检测到 Ctrl+C，正在退出...")
             break
-
-        ai_response = dialogue_service.run_conversation(user_query, chat_history)
-        print(f"AI: {ai_response}")
-
-        # 更新对话历史
-        chat_history.append((user_query, ai_response))
+        except Exception as e:
+            logger.error(f"对话过程出错: {e}", exc_info=True)
+            print(f"\n❌ 发生错误: {e}")
 

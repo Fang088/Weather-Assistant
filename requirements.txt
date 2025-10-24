@@ -2,9 +2,11 @@
 langchain>=0.1.0
 langchain-core>=0.1.0
 langchain-openai>=0.0.5
+langchain-community>=0.0.20  # 新增：包含 SQL Agent 和 SQLDatabase
 
 # 数据库
 pymysql>=1.1.0
+sqlalchemy>=2.0.0  # 新增：LangChain SQL 依赖 SQLAlchemy
 
 # 配置管理
 python-dotenv>=1.0.0
