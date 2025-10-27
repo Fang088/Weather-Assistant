@@ -1,15 +1,11 @@
 """
-升级版对话服务 - 集成 LangChain SQL Agent
+智能天气助手 - 基于 LangChain SQL Agent
 
-新特性:
+核心特性:
 1. 使用 create_sql_agent 创建 SQL Agent，支持自然语言直接查询数据库
-2. 集成 QuerySQLDataBaseTool 和 WeatherTool，双工具协同
+2. 集成 QuerySQLDataBaseTool、InfoSQLDatabaseTool、ListSQLDatabaseTool 和 WeatherTool
 3. Agent 可以自主决定何时查询数据库、何时调用天气工具
-4. 更强大的多轮对话能力
-
-对比传统版本：
-- 传统版本：只能通过 WeatherTool 间接访问数据库
-- SQL Agent 版本：可以直接用自然语言查询数据库 + 调用天气工具
+4. 支持复杂的多轮对话和组合查询
 """
 
 import logging
@@ -46,25 +42,21 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
-class SQLAgentDialogueService:
+class DialogueService:
     """
-    基于 LangChain SQL Agent 的高级对话服务
+    基于 LangChain SQL Agent 的智能对话服务
 
     架构优势：
     1. Agent 可以自主查询数据库表结构
     2. 支持复杂的自然语言数据库查询（如："有多少个直辖市？"）
-    3. 与 WeatherTool 协同工作
+    3. 与 WeatherTool 协同工作，提供天气查询能力
     """
 
-    def __init__(self, use_sql_agent: bool = True):
+    def __init__(self):
         """
         初始化对话服务
-
-        Args:
-            use_sql_agent: 是否使用 SQL Agent（True=高级模式，False=传统模式）
         """
         self.config = ConfigManager()
-        self.use_sql_agent = use_sql_agent
 
         # 初始化 LLM
         self.llm = ChatOpenAI(
@@ -80,17 +72,14 @@ class SQLAgentDialogueService:
             logger.info("✅ LangChain SQLDatabase 初始化成功")
         except Exception as e:
             logger.error(f"❌ SQLDatabase 初始化失败: {e}")
-            self.sql_db = None
+            raise RuntimeError("数据库初始化失败，无法启动服务")
 
-        # 初始化工具和 Agent
-        if self.use_sql_agent and self.sql_db:
-            self._setup_sql_agent()
-        else:
-            self._setup_traditional_agent()
+        # 初始化 SQL Agent
+        self._setup_agent()
 
-    def _setup_sql_agent(self):
+    def _setup_agent(self):
         """
-        设置 SQL Agent 模式（高级模式）
+        设置 SQL Agent
 
         功能：
         - 自然语言查询数据库
@@ -98,7 +87,7 @@ class SQLAgentDialogueService:
         - 列出所有表
         - 调用天气工具
         """
-        logger.info("🚀 初始化 SQL Agent 模式")
+        logger.info("🚀 初始化 SQL Agent")
 
         # 创建 SQL 相关工具
         sql_tools = [
@@ -108,7 +97,7 @@ class SQLAgentDialogueService:
         ]
 
         # 创建天气工具
-        weather_tool = Weather_Service.create_weather_tool(use_langchain_sql=True)
+        weather_tool = Weather_Service.create_weather_tool()
         if weather_tool:
             all_tools = sql_tools + [weather_tool]
         else:
@@ -144,77 +133,21 @@ class SQLAgentDialogueService:
 
         logger.info(f"✅ SQL Agent 创建成功，工具数量: {len(all_tools)}")
 
-    def _setup_traditional_agent(self):
-        """
-        设置传统 Agent 模式（兼容旧版）
-        """
-        logger.info("📦 初始化传统 Agent 模式")
-
-        # 初始化 WeatherTool
-        self.weather_tool = Weather_Service.create_weather_tool(use_langchain_sql=False)
-        if not self.weather_tool:
-            logger.error("❌ 天气工具初始化失败")
-            self.tools = []
-        else:
-            self.tools = [self.weather_tool]
-
-        # 设置系统提示词
-        self.system_prompt = "你是一个可以实时查询天气的AI助手。当用户询问天气时，使用提供的工具获取最新信息，并在气温后面加上℃让回答更美观。"
-
-        # 创建 Prompt Template
-        self.prompt = ChatPromptTemplate.from_messages(
-            [
-                SystemMessage(content=self.system_prompt),
-                MessagesPlaceholder(variable_name="chat_history"),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad"),
-            ]
-        )
-
-        # 创建传统 Agent
-        self.agent = create_tool_calling_agent(self.llm, self.tools, self.prompt)
-        self.agent_executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            verbose=True,
-            handle_parsing_errors=True
-        )
-
-        logger.info("✅ 传统 Agent 创建成功")
-
     def run_conversation(self, user_input: str, chat_history: List[Tuple[str, str]] = None) -> str:
         """
         运行一次对话
 
         Args:
             user_input: 用户输入
-            chat_history: 历史对话（可选）
+            chat_history: 历史对话（可选，暂不使用但保留接口）
 
         Returns:
             AI 回复
         """
-        if chat_history is None:
-            chat_history = []
-
-        # 将历史对话转换为 LangChain 消息格式
-        formatted_chat_history = []
-        for human_msg, ai_msg in chat_history:
-            formatted_chat_history.append(HumanMessage(content=human_msg))
-            formatted_chat_history.append(AIMessage(content=ai_msg))
-
         try:
-            # SQL Agent 模式
-            if self.use_sql_agent:
-                # SQL Agent 使用 input 参数
-                response = self.agent_executor.invoke({"input": user_input})
-                return response.get("output", "抱歉，我无法处理这个请求。")
-
-            # 传统模式
-            else:
-                response = self.agent_executor.invoke(
-                    {"input": user_input, "chat_history": formatted_chat_history}
-                )
-                return response["output"]
+            # 使用 SQL Agent 执行对话
+            response = self.agent_executor.invoke({"input": user_input})
+            return response.get("output", "抱歉，我无法处理这个请求。")
 
         except Exception as e:
             logger.error(f"对话执行失败: {e}", exc_info=True)
@@ -224,7 +157,7 @@ class SQLAgentDialogueService:
 # 主程序入口
 if __name__ == "__main__":
     print("=" * 60)
-    print("🌤️  AI 天气助手 - SQL Agent 版本")
+    print("🌤️  智能天气助手")
     print("=" * 60)
     print("功能特性:")
     print("  1. 自然语言查询数据库（如：有多少个直辖市？）")
@@ -234,21 +167,14 @@ if __name__ == "__main__":
     print("命令:")
     print("  'exit' 或 'quit' - 退出程序")
     print("  'clear' - 清除对话历史")
-    print("  'mode' - 切换 Agent 模式")
     print("=" * 60)
     print()
 
-    # 用户选择模式
-    mode_choice = input("选择模式 (1=SQL Agent 高级模式, 2=传统模式) [默认:1]: ").strip()
-    use_sql_agent = mode_choice != "2"
-
     # 初始化服务
     try:
-        dialogue_service = SQLAgentDialogueService(use_sql_agent=use_sql_agent)
+        dialogue_service = DialogueService()
         chat_history = []
-
-        mode_name = "SQL Agent 高级模式" if use_sql_agent else "传统模式"
-        print(f"\n✅ {mode_name} 已启动\n")
+        print("\n✅ 服务已启动\n")
 
         while True:
             try:
@@ -266,10 +192,6 @@ if __name__ == "__main__":
                     print("🗑️  对话历史已清除")
                     continue
 
-                if user_query.lower() == 'mode':
-                    print(f"📊 当前模式: {mode_name}")
-                    continue
-
                 # 执行对话
                 ai_response = dialogue_service.run_conversation(user_query, chat_history)
                 print(f"\n🤖 AI: {ai_response}")
@@ -284,3 +206,4 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"程序启动失败: {e}", exc_info=True)
         print(f"\n❌ 启动失败: {e}")
+

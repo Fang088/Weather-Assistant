@@ -15,12 +15,6 @@ project_root = os.path.abspath(project_root)
 sys.path.insert(0, project_root)
 
 try:
-    from database.db_manager import AreaCodeManager
-except ImportError as e:
-    logging.error(f"无法导入 AreaCodeManager: {e}。请确保 'GetWeather/database/db_manager.py' 文件存在且路径正确。")
-    AreaCodeManager = None
-
-try:
     from database.sql_database_wrapper import LangChainSQLDatabase
 except ImportError as e:
     logging.error(f"无法导入 LangChainSQLDatabase: {e}")
@@ -44,12 +38,10 @@ class WeatherTool(BaseTool):
     name: str = "weather_query"
     description: str = "查询指定地区的天气信息。输入应为地区名称,例如 '北京'。"
     args_schema: Type[BaseModel] = WeatherQueryInput
-    db_manager: Optional[AreaCodeManager] = None  # 保留兼容性
-    sql_db: Optional[LangChainSQLDatabase] = None  # LangChain SQL 数据库
+    sql_db: LangChainSQLDatabase  # LangChain SQL 数据库
     base_url: str = ""
     api_key: Optional[str] = None
     unifuncs_search_url: str = "https://api.302.ai/unifuncs/api/web-search/search"
-    use_langchain_sql: bool = False  # 标记使用的模式
 
     class Config:
         arbitrary_types_allowed = True  # 允许自定义类型
@@ -57,31 +49,22 @@ class WeatherTool(BaseTool):
     def __init__(self, **data):
         """
         初始化天气查询工具。
-        优先使用 LangChain SQLDatabase，提供更强大的查询能力
 
         Args:
-            sql_db: LangChainSQLDatabase 实例（推荐）
-            db_manager: AreaCodeManager 实例（兼容旧版）
+            sql_db: LangChainSQLDatabase 实例（必需）
             api_key: API密钥,用于Unifuncs搜索。
         """
         super().__init__(**data)
 
-        # 优先使用 LangChain SQL Database
-        if self.sql_db is not None:
-            logger.info("使用 LangChain SQLDatabase 进行数据库查询")
-            self.use_langchain_sql = True
-        elif self.db_manager is not None:
-            logger.info("使用传统 AreaCodeManager 进行数据库查询")
-            self.use_langchain_sql = False
-        else:
-            raise ValueError("必须提供 sql_db 或 db_manager 实例。WeatherTool 无法正常工作。")
+        if self.sql_db is None:
+            raise ValueError("必须提供 sql_db 实例。WeatherTool 无法正常工作。")
 
+        logger.info("使用 LangChain SQLDatabase 进行数据库查询")
         self.base_url = "http://www.weather.com.cn/weather/{}.shtml"
 
     def _get_area_code(self, area_name: str) -> Optional[str]:
         """
         根据地区名称从数据库获取天气编码。
-        优先使用 LangChain SQL，回退到传统方法
 
         Args:
             area_name: 地区名称
@@ -89,52 +72,38 @@ class WeatherTool(BaseTool):
         Returns:
             天气编码，未找到返回 None
         """
-        # 方案1: 使用 LangChain SQL Database
-        if self.use_langchain_sql and self.sql_db:
-            try:
-                # 使用 LangChain 的 SQL 查询能力
-                query = f"""
-                SELECT weather_code, region
-                FROM weather_regions
-                WHERE region LIKE '%{area_name}%'
-                LIMIT 1
-                """
-                result = self.sql_db.run_query(query)
+        try:
+            # 使用 LangChain 的 SQL 查询能力
+            query = f"""
+            SELECT weather_code, region
+            FROM weather_regions
+            WHERE region LIKE '%{area_name}%'
+            LIMIT 1
+            """
+            result = self.sql_db.run_query(query)
 
-                # 解析结果（LangChain 返回字符串格式）
-                if result and result.strip():
-                    # 结果格式类似: "[('101010100', '北京')]"
-                    # 提取天气编码
-                    import ast
-                    try:
-                        parsed = ast.literal_eval(result)
-                        if parsed and len(parsed) > 0:
-                            weather_code = parsed[0][0]
-                            region_name = parsed[0][1]
-                            logger.info(f"找到地区 '{area_name}' 的匹配项: {region_name}, 编码: {weather_code}")
-                            return weather_code
-                    except (ValueError, SyntaxError, IndexError) as e:
-                        logger.warning(f"解析 SQL 结果失败: {e}, 原始结果: {result}")
-                        return None
+            # 解析结果（LangChain 返回字符串格式）
+            if result and result.strip():
+                # 结果格式类似: "[('101010100', '北京')]"
+                # 提取天气编码
+                import ast
+                try:
+                    parsed = ast.literal_eval(result)
+                    if parsed and len(parsed) > 0:
+                        weather_code = parsed[0][0]
+                        region_name = parsed[0][1]
+                        logger.info(f"找到地区 '{area_name}' 的匹配项: {region_name}, 编码: {weather_code}")
+                        return weather_code
+                except (ValueError, SyntaxError, IndexError) as e:
+                    logger.warning(f"解析 SQL 结果失败: {e}, 原始结果: {result}")
+                    return None
 
-                logger.warning(f"未在数据库中找到地区 '{area_name}' 对应的编码")
-                return None
+            logger.warning(f"未在数据库中找到地区 '{area_name}' 对应的编码")
+            return None
 
-            except Exception as e:
-                logger.error(f"LangChain SQL 查询失败: {e}")
-                return None
-
-        # 方案2: 使用传统 AreaCodeManager（兼容旧版）
-        elif self.db_manager:
-            matching_regions = self.db_manager.search_regions_by_name(area_name)
-            if matching_regions:
-                logger.info(f"找到地区 '{area_name}' 的匹配项: {matching_regions[0]['region']}, 编码: {matching_regions[0]['weather_code']}")
-                return matching_regions[0]['weather_code']
-            else:
-                logger.warning(f"未在数据库中找到地区 '{area_name}' 对应的编码")
-                return None
-
-        return None
+        except Exception as e:
+            logger.error(f"LangChain SQL 查询失败: {e}")
+            return None
 
     def _search_weather_via_unifuncs(self, area_name: str) -> Optional[dict]:
         """
@@ -225,7 +194,6 @@ class WeatherTool(BaseTool):
     def _save_area_code_to_db(self, area_name: str, weather_code: str) -> bool:
         """
         将新发现的地区编码保存到数据库。
-        支持 LangChain SQL 和传统方法
 
         Args:
             area_name: 地区名称
@@ -234,64 +202,39 @@ class WeatherTool(BaseTool):
         Returns:
             保存成功返回 True，否则返回 False
         """
-        # 方案1: 使用 LangChain SQL Database
-        if self.use_langchain_sql and self.sql_db:
+        try:
+            # 先检查是否已存在
+            check_query = f"""
+            SELECT COUNT(*) as count
+            FROM weather_regions
+            WHERE region = '{area_name}'
+            """
+            check_result = self.sql_db.run_query(check_query)
+
+            # 解析计数结果
+            import ast
             try:
-                # 先检查是否已存在
-                check_query = f"""
-                SELECT COUNT(*) as count
-                FROM weather_regions
-                WHERE region = '{area_name}'
-                """
-                check_result = self.sql_db.run_query(check_query)
+                parsed = ast.literal_eval(check_result)
+                count = parsed[0][0] if parsed else 0
+            except:
+                count = 0
 
-                # 解析计数结果
-                import ast
-                try:
-                    parsed = ast.literal_eval(check_result)
-                    count = parsed[0][0] if parsed else 0
-                except:
-                    count = 0
-
-                if count > 0:
-                    logger.warning(f"地区 '{area_name}' 已存在于数据库中，未重复添加。")
-                    return False
-
-                # 执行插入
-                insert_query = f"""
-                INSERT INTO weather_regions (region, weather_code, province, region_type)
-                VALUES ('{area_name}', '{weather_code}', '', '地级市')
-                """
-                self.sql_db.run_query(insert_query)
-                logger.info(f"成功将地区 '{area_name}' 的编码 '{weather_code}' 保存到数据库（使用 LangChain SQL）")
-                return True
-
-            except Exception as e:
-                logger.error(f"使用 LangChain SQL 保存地区编码时发生错误: {e}", exc_info=True)
+            if count > 0:
+                logger.warning(f"地区 '{area_name}' 已存在于数据库中，未重复添加。")
                 return False
 
-        # 方案2: 使用传统 AreaCodeManager
-        elif self.db_manager:
-            try:
-                success = self.db_manager.insert_region(
-                    region=area_name,
-                    weather_code=weather_code,
-                    province="",
-                    region_type="地级市"
-                )
+            # 执行插入
+            insert_query = f"""
+            INSERT INTO weather_regions (region, weather_code, province, region_type)
+            VALUES ('{area_name}', '{weather_code}', '', '地级市')
+            """
+            self.sql_db.run_query(insert_query)
+            logger.info(f"成功将地区 '{area_name}' 的编码 '{weather_code}' 保存到数据库")
+            return True
 
-                if success:
-                    logger.info(f"成功将地区 '{area_name}' 的编码 '{weather_code}' 保存到数据库。")
-                else:
-                    logger.warning(f"地区 '{area_name}' 可能已存在于数据库中，未重复添加。")
-
-                return success
-
-            except Exception as e:
-                logger.error(f"保存地区编码到数据库时发生错误: {e}", exc_info=True)
-                return False
-
-        return False
+        except Exception as e:
+            logger.error(f"保存地区编码到数据库时发生错误: {e}", exc_info=True)
+            return False
 
     def _run(self, area_name: str) -> str:
         """
@@ -348,12 +291,9 @@ class WeatherTool(BaseTool):
         return self._run(area_name)
 
 # 工具实例化函数
-def create_weather_tool(use_langchain_sql=True):
+def create_weather_tool():
     """
     创建天气查询工具实例。
-
-    Args:
-        use_langchain_sql: 是否使用 LangChain SQL Database（推荐，默认 True）
 
     Returns:
         WeatherTool实例,如果初始化失败则返回 None。
@@ -362,32 +302,20 @@ def create_weather_tool(use_langchain_sql=True):
         logger.error("ConfigManager 未成功导入,无法创建 WeatherTool 实例。")
         return None
 
+    if LangChainSQLDatabase is None:
+        logger.error("LangChainSQLDatabase 未成功导入,无法创建 WeatherTool 实例。")
+        return None
+
     try:
         # 加载配置获取 API key
         config = ConfigManager()
 
-        # 优先使用 LangChain SQL Database
-        if use_langchain_sql and LangChainSQLDatabase is not None:
-            try:
-                sql_db = LangChainSQLDatabase()
-                logger.info("✅ 使用 LangChain SQLDatabase 创建 WeatherTool")
-                return WeatherTool(
-                    sql_db=sql_db,
-                    api_key=config.api_key
-                )
-            except Exception as e:
-                logger.warning(f"LangChain SQLDatabase 初始化失败: {e}，回退到传统模式")
-                # 回退到传统方法
+        # 创建 LangChain SQL Database
+        sql_db = LangChainSQLDatabase()
+        logger.info("✅ 使用 LangChain SQLDatabase 创建 WeatherTool")
 
-        # 回退：使用传统 AreaCodeManager
-        if AreaCodeManager is None:
-            logger.error("AreaCodeManager 和 LangChainSQLDatabase 均未成功导入,无法创建 WeatherTool 实例。")
-            return None
-
-        db_manager = AreaCodeManager()
-        logger.info("⚠️ 使用传统 AreaCodeManager 创建 WeatherTool（建议升级到 LangChain SQL）")
         return WeatherTool(
-            db_manager=db_manager,
+            sql_db=sql_db,
             api_key=config.api_key
         )
 
@@ -400,7 +328,7 @@ if __name__ == "__main__":
 
     weather_tool = None
     try:
-        # 创建工具实例（默认使用 LangChain SQL）
+        # 创建工具实例
         weather_tool = create_weather_tool()
 
         if weather_tool:
@@ -413,9 +341,7 @@ if __name__ == "__main__":
     except Exception as e:
         logger.critical(f"主程序发生未预期错误: {e}", exc_info=True)
     finally:
-        if weather_tool and hasattr(weather_tool, 'db_manager') and weather_tool.db_manager:
-            weather_tool.db_manager.disconnect()
-            print("\n数据库连接已关闭。")
-        elif weather_tool and hasattr(weather_tool, 'sql_db') and weather_tool.sql_db:
+        if weather_tool and hasattr(weather_tool, 'sql_db') and weather_tool.sql_db:
             weather_tool.sql_db.close()
             print("\n数据库连接已关闭。")
+
