@@ -162,35 +162,3 @@ class LangChainSQLDatabase:
             self.engine.dispose()
             logger.info("数据库连接已关闭")
 
-
-# 使用示例
-if __name__ == "__main__":
-
-    try:
-        # 创建数据库实例
-        db_wrapper = LangChainSQLDatabase()
-
-        # 1. 查看表结构信息
-        print("=" * 60)
-        print("数据库表结构信息（供 LLM 理解）:")
-        print("=" * 60)
-        print(db_wrapper.get_table_info())
-
-        # 2. 执行查询
-        print("\n" + "=" * 60)
-        print("查询测试 - 搜索'北京':")
-        print("=" * 60)
-        result = db_wrapper.search_region_by_name("北京")
-        print(result)
-
-        # 3. 直接执行 SQL
-        print("\n" + "=" * 60)
-        print("直接 SQL 查询 - 统计记录数:")
-        print("=" * 60)
-        count_result = db_wrapper.run_query("SELECT COUNT(*) as total FROM weather_regions")
-        print(f"总记录数: {count_result}")
-
-    except Exception as e:
-        logger.critical(f"测试失败: {e}", exc_info=True)
-    finally:
-        db_wrapper.close()

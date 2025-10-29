@@ -1,10 +1,11 @@
 
+import json
 import requests
 import re
-import json
 from langchain.tools import BaseTool
 from typing import Optional, Type
 from pydantic import BaseModel, Field
+from langchain_core.language_models import BaseChatModel
 import logging
 import sys
 import os
@@ -16,14 +17,10 @@ sys.path.insert(0, project_root)
 
 try:
     from database.sql_database_wrapper import LangChainSQLDatabase
+    from Config_Manager import ConfigManager
 except ImportError as e:
-    logging.error(f"无法导入 LangChainSQLDatabase: {e}")
+    logging.error(f"无法导入模块: {e}")
     LangChainSQLDatabase = None
-
-try:
-    from src.Config_Manager import ConfigManager
-except ImportError as e:
-    logging.error(f"无法导入 ConfigManager: {e}")
     ConfigManager = None
 
 # 配置日志
@@ -39,9 +36,8 @@ class WeatherTool(BaseTool):
     description: str = "查询指定地区的天气信息。输入应为地区名称,例如 '北京'。"
     args_schema: Type[BaseModel] = WeatherQueryInput
     sql_db: LangChainSQLDatabase  # LangChain SQL 数据库
-    base_url: str = ""
-    api_key: Optional[str] = None
-    unifuncs_search_url: str = "https://api.302.ai/unifuncs/api/web-search/search"
+    llm: BaseChatModel  # LLM实例用于整理天气信息
+    config: ConfigManager  # 配置管理器
 
     class Config:
         arbitrary_types_allowed = True  # 允许自定义类型
@@ -52,162 +48,222 @@ class WeatherTool(BaseTool):
 
         Args:
             sql_db: LangChainSQLDatabase 实例（必需）
-            api_key: API密钥,用于Unifuncs搜索。
+            llm: ChatModel 实例（必需，用于整理天气信息）
+            config: ConfigManager 实例（必需）
         """
         super().__init__(**data)
 
         if self.sql_db is None:
             raise ValueError("必须提供 sql_db 实例。WeatherTool 无法正常工作。")
 
-        logger.info("使用 LangChain SQLDatabase 进行数据库查询")
-        self.base_url = "http://www.weather.com.cn/weather/{}.shtml"
+        if self.llm is None:
+            raise ValueError("必须提供 llm 实例。WeatherTool 无法正常工作。")
 
-    def _get_area_code(self, area_name: str) -> Optional[str]:
+        if self.config is None:
+            raise ValueError("必须提供 config 实例。WeatherTool 无法正常工作。")
+
+        logger.info("使用外部搜索API和LLM进行天气查询")
+
+    def _call_search_api(self, area_name: str) -> Optional[dict]:
         """
-        根据地区名称从数据库获取天气编码。
+        调用外部搜索API获取天气信息
 
         Args:
             area_name: 地区名称
 
         Returns:
-            天气编码，未找到返回 None
+            搜索结果字典，失败返回 None
         """
         try:
-            # 使用 LangChain 的 SQL 查询能力
-            query = f"""
-            SELECT weather_code, region
-            FROM weather_regions
-            WHERE region LIKE '%{area_name}%'
-            LIMIT 1
-            """
-            result = self.sql_db.run_query(query)
-
-            # 解析结果（LangChain 返回字符串格式）
-            if result and result.strip():
-                # 结果格式类似: "[('101010100', '北京')]"
-                # 提取天气编码
-                import ast
-                try:
-                    parsed = ast.literal_eval(result)
-                    if parsed and len(parsed) > 0:
-                        weather_code = parsed[0][0]
-                        region_name = parsed[0][1]
-                        logger.info(f"找到地区 '{area_name}' 的匹配项: {region_name}, 编码: {weather_code}")
-                        return weather_code
-                except (ValueError, SyntaxError, IndexError) as e:
-                    logger.warning(f"解析 SQL 结果失败: {e}, 原始结果: {result}")
-                    return None
-
-            logger.warning(f"未在数据库中找到地区 '{area_name}' 对应的编码")
-            return None
-
-        except Exception as e:
-            logger.error(f"LangChain SQL 查询失败: {e}")
-            return None
-
-    def _search_weather_via_unifuncs(self, area_name: str) -> Optional[dict]:
-        """
-        通过 Unifuncs API 搜索天气信息。
-
-        Args:
-            area_name: 地区名称
-
-        Returns:
-            包含 'snippet'(天气描述) 和 'weather_code'(编码) 的字典，失败返回 None
-        """
-        if not self.api_key:
-            logger.error("API密钥未配置，无法调用 Unifuncs 搜索。")
-            return None
-
-        try:
+            url = self.config.search_api_url
             headers = {
-                "Authorization": f"Bearer {self.api_key}",
+                "Authorization": f"Bearer {self.config.search_api_key}",
                 "Content-Type": "application/json"
             }
-
             payload = {
-                "query": f"{area_name}天气",
-                "page": 1,
-                "count": 1
+                "query": f"{area_name}天气"
             }
 
-            logger.info(f"通过 Unifuncs API 搜索 '{area_name}' 的天气信息...")
-            response = requests.post(
-                self.unifuncs_search_url,
-                headers=headers,
-                json=payload,
-                timeout=10
-            )
+            logger.info(f"🔍 调用搜索API查询 '{area_name}' 的天气...")
 
-            if response.status_code != 200:
-                logger.error(f"Unifuncs API 请求失败，状态码: {response.status_code}, 响应: {response.text}")
-                return None
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            response.raise_for_status()
 
-            data = response.json()
+            result = response.json()
+            logger.info(f"✅ 搜索API返回成功")
 
-            # 解析响应数据（按照新的格式）
-            if data.get('code') != 0:
-                logger.error(f"Unifuncs API 返回错误代码: {data.get('code')}, 消息: {data.get('message')}")
-                return None
+            return result
 
-            # 检查 data.webPages 是否存在且有数据
-            web_pages = data.get('data', {}).get('webPages', [])
-            if not web_pages or len(web_pages) == 0:
-                logger.warning(f"Unifuncs API 未返回 '{area_name}' 的搜索结果。")
-                return None
-
-            # 获取第一个搜索结果
-            result = web_pages[0]
-            snippet = result.get('snippet', '')
-            display_url = result.get('displayUrl', '')
-
-            # 从 displayUrl 中提取天气编码
-            # URL 格式: https://www.weather.com.cn/weather/{编码}.shtml
-            weather_code = None
-            match = re.search(r'weather\.com\.cn/weather/(\d+)\.shtml', display_url)
-            if match:
-                weather_code = match.group(1)
-                logger.info(f"从 Unifuncs 搜索结果中提取到天气编码: {weather_code}")
-            else:
-                logger.warning(f"无法从 URL '{display_url}' 中提取天气编码，但仍返回snippet供模型解析。")
-
-            # 无论是否提取到编码，都返回 snippet 数据
-            return {
-                'snippet': snippet,
-                'weather_code': weather_code,  # 可能为 None
-                'display_url': display_url
-            }
-
-        except requests.exceptions.Timeout:
-            logger.error("Unifuncs API 请求超时。")
-            return None
         except requests.exceptions.RequestException as e:
-            logger.error(f"Unifuncs API 请求异常: {e}")
-            return None
-        except json.JSONDecodeError as e:
-            logger.error(f"解析 Unifuncs API 响应失败: {e}")
+            logger.error(f"❌ 调用搜索API失败: {e}")
             return None
         except Exception as e:
-            logger.error(f"调用 Unifuncs API 时发生未知错误: {e}", exc_info=True)
+            logger.error(f"❌ 处理搜索结果时出错: {e}", exc_info=True)
             return None
 
-    def _save_area_code_to_db(self, area_name: str, weather_code: str) -> bool:
+    def _extract_weather_code_from_url(self, url: str) -> Optional[str]:
         """
-        将新发现的地区编码保存到数据库。
+        从中国天气网URL中提取天气编码
+
+        Args:
+            url: 中国天气网的URL，如 https://www.weather.com.cn/weather/101281001.shtml
+
+        Returns:
+            9位数字天气编码，未找到返回 None
+        """
+        import re
+        # 匹配 weather.com.cn/weather/数字.shtml 格式
+        match = re.search(r'weather\.com\.cn/weather/(\d{9})\.shtml', url)
+        if match:
+            return match.group(1)
+        return None
+
+    def _parse_weather_with_llm(self, area_name: str, search_result: dict) -> Optional[dict]:
+        """
+        使用LLM解析搜索结果并提取天气信息
 
         Args:
             area_name: 地区名称
-            weather_code: 天气编码
+            search_result: 搜索API返回的结果，格式为：
+                {
+                    "searchParameters": {...},
+                    "results": [
+                        {
+                            "title": "...",
+                            "link": "https://www.weather.com.cn/weather/101281001.shtml",
+                            "snippet": "天气信息摘要"
+                        }
+                    ]
+                }
+
+        Returns:
+            包含天气信息的字典，失败返回 None
+        """
+        try:
+            # 提取搜索结果
+            results = search_result.get('results', [])
+
+            if not results:
+                logger.error("搜索结果为空")
+                return None
+
+            # 首先从搜索结果中提取天气编码
+            weather_code = None
+            weather_url = None
+
+            for result in results:
+                link = result.get('link', '')
+                if 'weather.com.cn' in link:
+                    weather_code = self._extract_weather_code_from_url(link)
+                    if weather_code:
+                        weather_url = link
+                        logger.info(f"✅ 从搜索结果提取到天气编码: {weather_code}")
+                        break
+
+            # 构建用于LLM的搜索结果文本
+            search_text = "搜索结果：\n"
+            for i, result in enumerate(results, 1):
+                search_text += f"\n结果{i}：\n"
+                search_text += f"标题: {result.get('title', '')}\n"
+                search_text += f"链接: {result.get('link', '')}\n"
+                search_text += f"摘要: {result.get('snippet', '')}\n"
+
+            # 构造prompt让LLM提取天气信息
+            prompt = f"""请从以下搜索结果中提取"{area_name}"的天气信息，并严格按照以下JSON格式返回：
+
+{{
+    "region": "完整地区名称（必须包含市/县，如：北京市、上海市、湛江市、深圳市）",
+    "province": "所属省份（直辖市填写自身名称，如：北京市、广东省、海南省）",
+    "region_type": "地区类型（只能是以下之一：直辖市、省会城市、地级市、县级市）",
+    "temperature": "温度范围（格式：XX℃ ~ XX℃，如：22℃ ~ 27℃）",
+    "weather_condition": "天气状况（如：晴、多云、小雨、中雨、大雨、雷阵雨等）",
+    "weather_info": "完整天气描述（基于搜索结果的snippet整理出详细的天气信息，包括温度、天气、风力等）",
+    "advice": "生活建议（根据天气状况给出2-3条实用建议，包含：穿衣建议、出行建议、健康建议）"
+}}
+
+{search_text}
+
+⚠️ 重要要求：
+1. 只返回JSON对象，不要包含任何其他文字、解释或markdown标记
+2. region 必须是完整的地区名称，包含"市"或"县"
+3. province 必须准确判断所属省份
+4. region_type 必须准确判断（例如：湛江是广东省的地级市）
+5. 从snippet中提取温度信息，格式化为 XX℃ ~ XX℃
+6. weather_info 要综合snippet的信息，描述清晰
+7. advice 必须根据实际天气情况生成实用建议
+8. 不要在任何文字中添加引用标记如[1]、[2]等
+
+立即返回JSON："""
+
+            logger.info(f"🤖 使用LLM解析天气信息...")
+
+            # 调用LLM
+            response = self.llm.invoke(prompt)
+            response_text = response.content.strip()
+
+            # 提取JSON
+            json_text = response_text
+            if "```json" in response_text:
+                json_text = response_text.split("```json")[1].split("```")[0].strip()
+            elif "```" in response_text:
+                json_text = response_text.split("```")[1].split("```")[0].strip()
+
+            # 解析JSON
+            weather_data = json.loads(json_text.strip())
+
+            # 将天气编码添加到结果中
+            if weather_code:
+                weather_data['weather_code'] = weather_code
+            else:
+                weather_data['weather_code'] = "未找到"
+                logger.warning("⚠️ 未能从搜索结果中提取到天气编码")
+
+            # 验证必要字段
+            required_fields = ['region', 'temperature', 'weather_condition']
+            missing_fields = [field for field in required_fields if not weather_data.get(field)]
+
+            if missing_fields:
+                logger.warning(f"⚠️ 部分关键字段缺失: {missing_fields}")
+
+            logger.info(f"✅ 成功解析 {weather_data.get('region')} 的天气数据")
+            logger.info(f"   省份: {weather_data.get('province')}, 类型: {weather_data.get('region_type')}, 编码: {weather_data.get('weather_code')}")
+
+            return weather_data
+
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ 解析LLM返回的JSON失败: {e}")
+            logger.error(f"原始响应: {response_text if 'response_text' in locals() else '无'}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ 使用LLM解析天气信息时出错: {e}", exc_info=True)
+            return None
+
+    def _save_area_info_to_db(self, weather_data: dict) -> bool:
+        """
+        将地区信息保存到数据库
+
+        Args:
+            weather_data: 包含地区信息的字典
 
         Returns:
             保存成功返回 True，否则返回 False
         """
         try:
+            region = weather_data.get('region', '')
+            weather_code = weather_data.get('weather_code', '')
+            province = weather_data.get('province', '')
+            region_type = weather_data.get('region_type', '地级市')
+
+            # 验证必要字段
+            if not region or not weather_code or weather_code == "未找到":
+                logger.warning(f"地区信息不完整，跳过保存: region={region}, weather_code={weather_code}")
+                return False
+
             # 先检查是否已存在
             check_query = f"""
             SELECT COUNT(*) as count
             FROM weather_regions
-            WHERE region = '{area_name}'
+            WHERE region = '{region}' OR weather_code = '{weather_code}'
             """
             check_result = self.sql_db.run_query(check_query)
 
@@ -220,128 +276,127 @@ class WeatherTool(BaseTool):
                 count = 0
 
             if count > 0:
-                logger.warning(f"地区 '{area_name}' 已存在于数据库中，未重复添加。")
+                logger.info(f"地区 '{region}' 或编码 '{weather_code}' 已存在于数据库中")
                 return False
 
             # 执行插入
             insert_query = f"""
             INSERT INTO weather_regions (region, weather_code, province, region_type)
-            VALUES ('{area_name}', '{weather_code}', '', '地级市')
+            VALUES ('{region}', '{weather_code}', '{province}', '{region_type}')
             """
             self.sql_db.run_query(insert_query)
-            logger.info(f"成功将地区 '{area_name}' 的编码 '{weather_code}' 保存到数据库")
+            logger.info(f"✅ 成功保存地区信息: {region} ({region_type}), 编码: {weather_code}, 省份: {province}")
             return True
 
         except Exception as e:
-            logger.error(f"保存地区编码到数据库时发生错误: {e}", exc_info=True)
+            logger.error(f"保存地区信息到数据库时发生错误: {e}", exc_info=True)
             return False
 
     def _run(self, area_name: str) -> str:
         """
-        执行天气查询，返回天气信息或URL。
+        执行天气查询
 
         流程：
-        1. 先从数据库查询编码
-        2. 如果数据库没有，通过 Unifuncs API 搜索
-        3. 将新编码保存到数据库
-        4. 返回天气信息给模型
+        1. 调用外部搜索API获取天气相关信息
+        2. 使用LLM解析搜索结果，提取结构化天气信息
+        3. 保存地区信息到数据库
+        4. 返回格式化的天气信息（不包含数据来源）
         """
         try:
-            # 第一步：尝试从数据库获取编码
-            area_code = self._get_area_code(area_name)
-
-            if area_code:
-                # 数据库中找到编码，直接构建URL
-                url = self.base_url.format(area_code)
-                logger.info(f"从数据库为地区 '{area_name}' 生成天气URL: {url}")
-                return url
-
-            # 第二步：数据库未找到，尝试通过 Unifuncs API 搜索
-            logger.info(f"数据库中未找到 '{area_name}' 的编码，尝试通过 Unifuncs API 搜索...")
-            search_result = self._search_weather_via_unifuncs(area_name)
+            # 调用搜索API
+            search_result = self._call_search_api(area_name)
 
             if not search_result:
-                return f"抱歉，无法找到地区 '{area_name}' 的天气信息。请确认地区名称是否正确。"
+                return f"抱歉，无法获取地区 '{area_name}' 的天气信息。请稍后重试。"
 
-            # 第三步：提取信息
-            weather_code = search_result.get('weather_code')
-            snippet = search_result.get('snippet', '')
-            display_url = search_result.get('display_url', '')
+            # 使用LLM解析搜索结果
+            weather_data = self._parse_weather_with_llm(area_name, search_result)
 
-            # 如果提取到了天气编码，保存到数据库（供下次查询使用）
-            if weather_code:
-                self._save_area_code_to_db(area_name, weather_code)
-                url = self.base_url.format(weather_code)
-                response = f"{snippet}\n\n详细天气信息请访问：{url}"
-                logger.info(f"通过 Unifuncs API 为地区 '{area_name}' 获取到天气信息和编码。")
-            else:
-                # 即使没有编码，也返回 snippet 让模型进行解析
-                response = snippet if snippet else f"搜索到 '{area_name}' 的部分信息，但无法提取详细数据。"
-                logger.info(f"通过 Unifuncs API 为地区 '{area_name}' 获取到天气描述，但未提取到编码。")
+            if not weather_data:
+                return f"抱歉，无法解析地区 '{area_name}' 的天气信息。"
 
-            return response
+            # 提取信息
+            region = weather_data.get('region', area_name)
+            weather_info = weather_data.get('weather_info', '')
+            temperature = weather_data.get('temperature', '')
+            weather_condition = weather_data.get('weather_condition', '')
+            advice = weather_data.get('advice', '')
+
+            # 尝试保存地区信息到数据库
+            saved = self._save_area_info_to_db(weather_data)
+            if saved:
+                logger.info(f"💾 已保存 {region} 的信息到数据库")
+
+            # 构建响应消息 - 只包含文字信息，不显示数据来源
+            result = f"\n📍 {region} 天气情况\n"
+            result += "=" * 50 + "\n"
+            result += f"🌡️  温度: {temperature}\n"
+            result += f"☁️  天气: {weather_condition}\n"
+
+            if weather_info:
+                # 清理天气信息中的引用标记 [数字]
+                clean_weather_info = re.sub(r'\[\d+\]', '', weather_info)
+                clean_weather_info = re.sub(r'\s+', ' ', clean_weather_info).strip()
+                result += f"\n📝 详细信息:\n{clean_weather_info}\n"
+
+            if advice:
+                # 清理建议中的引用标记
+                clean_advice = re.sub(r'\[\d+\]', '', advice)
+                clean_advice = re.sub(r'\s+', ' ', clean_advice).strip()
+                result += f"\n💡 生活建议:\n{clean_advice}\n"
+
+            result += "=" * 50
+
+            return result
 
         except Exception as e:
-            logger.error(f"查询天气信息时发生未知错误: {e}", exc_info=True)
+            logger.error(f"查询天气信息时发生错误: {e}", exc_info=True)
             return f"查询天气信息时发生错误: {str(e)}"
 
     async def _arun(self, area_name: str) -> str:
-        """异步执行天气查询,返回天气网站URL"""
-        # 对于简单的URL生成,直接调用同步方法即可
+        """异步执行天气查询"""
         return self._run(area_name)
 
 # 工具实例化函数
-def create_weather_tool():
+def create_weather_tool(llm: BaseChatModel, sql_db: LangChainSQLDatabase = None, config: ConfigManager = None):
     """
     创建天气查询工具实例。
+
+    Args:
+        llm: ChatModel 实例（必需，用于解析天气信息）
+        sql_db: LangChainSQLDatabase 实例（可选，如果不提供则自动创建）
+        config: ConfigManager 实例（可选，如果不提供则自动创建）
 
     Returns:
         WeatherTool实例,如果初始化失败则返回 None。
     """
-    if ConfigManager is None:
-        logger.error("ConfigManager 未成功导入,无法创建 WeatherTool 实例。")
+    if llm is None:
+        logger.error("必须提供 LLM 实例，无法创建 WeatherTool。")
         return None
 
-    if LangChainSQLDatabase is None:
-        logger.error("LangChainSQLDatabase 未成功导入,无法创建 WeatherTool 实例。")
+    if LangChainSQLDatabase is None or ConfigManager is None:
+        logger.error("必要模块未成功导入,无法创建 WeatherTool 实例。")
         return None
 
     try:
-        # 加载配置获取 API key
-        config = ConfigManager()
+        # 如果没有提供 sql_db，则创建一个新的
+        if sql_db is None:
+            sql_db = LangChainSQLDatabase()
+            logger.info("创建新的 LangChainSQLDatabase 实例")
 
-        # 创建 LangChain SQL Database
-        sql_db = LangChainSQLDatabase()
-        logger.info("✅ 使用 LangChain SQLDatabase 创建 WeatherTool")
+        # 如果没有提供 config，则创建一个新的
+        if config is None:
+            config = ConfigManager()
+            logger.info("创建新的 ConfigManager 实例")
+
+        logger.info("✅ 使用外部搜索API和LLM创建 WeatherTool")
 
         return WeatherTool(
             sql_db=sql_db,
-            api_key=config.api_key
+            llm=llm,
+            config=config
         )
 
     except Exception as e:
         logger.critical(f"初始化 WeatherTool 失败: {e}", exc_info=True)
         return None
-
-# 使用示例
-if __name__ == "__main__":
-
-    weather_tool = None
-    try:
-        # 创建工具实例
-        weather_tool = create_weather_tool()
-
-        if weather_tool:
-            print("--- 测试查询 '北京' 的天气URL ---")
-            result_beijing = weather_tool.run("北京")
-            print(result_beijing)
-        else:
-            print("天气工具初始化失败,无法进行测试。")
-
-    except Exception as e:
-        logger.critical(f"主程序发生未预期错误: {e}", exc_info=True)
-    finally:
-        if weather_tool and hasattr(weather_tool, 'sql_db') and weather_tool.sql_db:
-            weather_tool.sql_db.close()
-            print("\n数据库连接已关闭。")
-
