@@ -121,15 +121,44 @@ class DialogueService:
    - 天气查询工具会自动调用搜索API并使用AI整理信息
    - 你只需要将工具返回的结果转述给用户即可
 
-**场景3：数据库统计问题 → 使用 SQL 相关工具**
-   示例："有多少个直辖市"、"列出所有省会城市"、"广东省有哪些地级市"、"数据库里有哪些城市"
-   处理：使用 sql_db_query、sql_db_schema、sql_db_list_tables 等工具
-   数据库表结构：weather_regions(region, weather_code, province, region_type)
+**场景3：数据库统计问题 → 使用 SQL 相关工具（支持模糊查询）**
+   示例问题：
+   - "有多少个直辖市"
+   - "列出所有省会城市"
+   - "广东省有哪些地级市" / "广东地级市" / "查询广东的地级市"
+   - "浙江省有多少个城市"
+   - "数据库里有哪些城市"
+
+   处理策略：
+   1. 使用 sql_db_schema 或 sql_db_list_tables 了解表结构
+   2. 使用 sql_db_query 执行SQL查询
+   3. 数据库表：weather_regions(region, weather_code, province, region_type)
+
+   🔍 模糊查询技巧（重要！）：
+   - 查询某个省份的地区时，使用 LIKE 模糊匹配
+   - province 字段可能是 "广东" 或 "广东省"，需要用 LIKE '%广东%'
+   - 示例SQL：
+     * 查询广东省地级市：
+       SELECT region, region_type FROM weather_regions
+       WHERE province LIKE '%广东%' AND region_type = '地级市'
+
+     * 查询浙江省所有城市：
+       SELECT region, region_type FROM weather_regions
+       WHERE province LIKE '%浙江%'
+
+     * 统计某省城市数量：
+       SELECT COUNT(*) as count FROM weather_regions
+       WHERE province LIKE '%广东%'
+
+   ⚠️ 注意事项：
+   - 始终使用 LIKE '%省份名%' 进行省份匹配（不要用 province = '广东'）
+   - region_type 字段值：直辖市、省会城市、地级市、县级市
+   - 查询结果要用友好的语言总结，列出清单
 
 💡 交互原则：
 - 回答要自然、友好、简洁明了
 - 温度后统一使用℃符号
-- 对于数据库查询结果，用清晰的语言总结
+- 对于数据库查询结果，用清晰的语言总结（如：列表形式、数量统计等）
 - 如果用户问题不明确，友好地请求澄清
 - 你可以访问最近5轮对话的上下文，理解上下文引用（如"那上海呢？"）
 
@@ -138,6 +167,7 @@ class DialogueService:
 - 只有明确需要查询实时数据或数据库时才使用相应工具
 - 天气查询工具已经集成了搜索和AI整理功能，你不需要额外处理
 - 利用对话历史理解用户的上下文引用，提供更智能的回复
+- 数据库查询必须使用 LIKE 模糊匹配省份名称，确保查询成功
 """),
             MessagesPlaceholder(variable_name="chat_history", optional=True),
             ("human", "{input}"),
@@ -199,7 +229,6 @@ if __name__ == "__main__":
     print("  🌡️  智能天气查询（如：北京天气怎么样？）")
     print("  💡 提供出行生活建议")
     print("  🔄 支持复杂组合查询")
-    print("  💭 记忆最近5轮对话的上下文")
     print("\n📌 使用提示:")
     print("  • 直接输入问题，我会智能理解并回答")
     print("  • 输入 'exit' 或 'quit' 退出程序")
@@ -213,7 +242,6 @@ if __name__ == "__main__":
         chat_history = []  # 对话历史，格式: [(user_msg, ai_msg), ...]
         max_history_turns = 5  # 最多保留5轮对话
         print("✅ 小天已上线，随时为您服务！")
-        print(f"💭 我会记住最近 {max_history_turns} 轮对话的上下文\n")
 
         while True:
             try:

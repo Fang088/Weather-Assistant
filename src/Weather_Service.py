@@ -240,7 +240,7 @@ class WeatherTool(BaseTool):
 
     def _save_area_info_to_db(self, weather_data: dict) -> bool:
         """
-        将地区信息保存到数据库
+        将地区信息保存到数据库（使用参数化查询防止 SQL 注入）
 
         Args:
             weather_data: 包含地区信息的字典
@@ -259,32 +259,35 @@ class WeatherTool(BaseTool):
                 logger.warning(f"地区信息不完整，跳过保存: region={region}, weather_code={weather_code}")
                 return False
 
-            # 先检查是否已存在
-            check_query = f"""
+            # 先检查是否已存在（使用参数化查询）
+            check_query = """
             SELECT COUNT(*) as count
             FROM weather_regions
-            WHERE region = '{region}' OR weather_code = '{weather_code}'
+            WHERE region = :region OR weather_code = :weather_code
             """
-            check_result = self.sql_db.run_query(check_query)
+            check_result = self.sql_db.run_query_safe(check_query, {
+                "region": region,
+                "weather_code": weather_code
+            })
 
             # 解析计数结果
-            import ast
-            try:
-                parsed = ast.literal_eval(check_result)
-                count = parsed[0][0] if parsed else 0
-            except:
-                count = 0
+            count = check_result[0]['count'] if check_result else 0
 
             if count > 0:
                 logger.info(f"地区 '{region}' 或编码 '{weather_code}' 已存在于数据库中")
                 return False
 
-            # 执行插入
-            insert_query = f"""
+            # 执行插入（使用参数化查询）
+            insert_query = """
             INSERT INTO weather_regions (region, weather_code, province, region_type)
-            VALUES ('{region}', '{weather_code}', '{province}', '{region_type}')
+            VALUES (:region, :weather_code, :province, :region_type)
             """
-            self.sql_db.run_query(insert_query)
+            self.sql_db.run_query_safe(insert_query, {
+                "region": region,
+                "weather_code": weather_code,
+                "province": province,
+                "region_type": region_type
+            })
             logger.info(f"✅ 成功保存地区信息: {region} ({region_type}), 编码: {weather_code}, 省份: {province}")
             return True
 
