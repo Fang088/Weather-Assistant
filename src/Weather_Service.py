@@ -38,11 +38,13 @@ class WeatherTool(BaseTool):
     sql_db: LangChainSQLDatabase  # LangChain SQL 数据库
     llm: BaseChatModel  # LLM实例用于整理天气信息
     config: ConfigManager  # 配置管理器
+    search_api_key: str = None  # 搜索 API Key（可选，优先使用）
+    search_api_url: str = "https://api.302.ai/search1api/search"  # 固定搜索 URL
 
     class Config:
         arbitrary_types_allowed = True  # 允许自定义类型
 
-    def __init__(self, **data):
+    def __init__(self, search_api_key: str = None, search_api_url: str = None, **data):
         """
         初始化天气查询工具。
 
@@ -50,8 +52,15 @@ class WeatherTool(BaseTool):
             sql_db: LangChainSQLDatabase 实例（必需）
             llm: ChatModel 实例（必需，用于整理天气信息）
             config: ConfigManager 实例（必需）
+            search_api_key: 搜索 API Key（可选，优先使用传入的值）
+            search_api_url: 搜索 API URL（可选，默认固定为 302.ai）
         """
         super().__init__(**data)
+
+        # 设置搜索 API Key 和 URL
+        self.search_api_key = search_api_key
+        if search_api_url:
+            self.search_api_url = search_api_url
 
         if self.sql_db is None:
             raise ValueError("必须提供 sql_db 实例。WeatherTool 无法正常工作。")
@@ -62,7 +71,7 @@ class WeatherTool(BaseTool):
         if self.config is None:
             raise ValueError("必须提供 config 实例。WeatherTool 无法正常工作。")
 
-        logger.info("使用外部搜索API和LLM进行天气查询")
+        logger.info(f"使用外部搜索API进行天气查询，URL: {self.search_api_url}")
 
     def _call_search_api(self, area_name: str) -> Optional[dict]:
         """
@@ -75,9 +84,14 @@ class WeatherTool(BaseTool):
             搜索结果字典，失败返回 None
         """
         try:
-            url = self.config.search_api_url
+            # 使用固定的搜索 URL
+            url = self.search_api_url
+
+            # 优先使用传入的 Key，其次使用配置文件的 Key
+            api_key = self.search_api_key or self.config.search_api_key
+
             headers = {
-                "Authorization": f"Bearer {self.config.search_api_key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             }
             payload = {
@@ -361,7 +375,13 @@ class WeatherTool(BaseTool):
         return self._run(area_name)
 
 # 工具实例化函数
-def create_weather_tool(llm: BaseChatModel, sql_db: LangChainSQLDatabase = None, config: ConfigManager = None):
+def create_weather_tool(
+    llm: BaseChatModel,
+    sql_db: LangChainSQLDatabase = None,
+    config: ConfigManager = None,
+    search_api_key: str = None,
+    search_api_url: str = None
+):
     """
     创建天气查询工具实例。
 
@@ -369,6 +389,8 @@ def create_weather_tool(llm: BaseChatModel, sql_db: LangChainSQLDatabase = None,
         llm: ChatModel 实例（必需，用于解析天气信息）
         sql_db: LangChainSQLDatabase 实例（可选，如果不提供则自动创建）
         config: ConfigManager 实例（可选，如果不提供则自动创建）
+        search_api_key: 搜索 API Key（可选，优先使用）
+        search_api_url: 搜索 API URL（可选，默认 https://api.302.ai/search1api/search）
 
     Returns:
         WeatherTool实例,如果初始化失败则返回 None。
@@ -397,7 +419,9 @@ def create_weather_tool(llm: BaseChatModel, sql_db: LangChainSQLDatabase = None,
         return WeatherTool(
             sql_db=sql_db,
             llm=llm,
-            config=config
+            config=config,
+            search_api_key=search_api_key,  # 传递搜索 API Key
+            search_api_url=search_api_url   # 传递搜索 URL
         )
 
     except Exception as e:

@@ -37,7 +37,7 @@ class ConfigManager:
         load_dotenv(dotenv_path=dotenv_path)
 
         # 验证必需的环境变量
-        required_vars = ["API_KEY", "SEARCH_API_KEY"]
+        required_vars = ["API_KEY"]
         missing_vars = [var for var in required_vars if not os.getenv(var)]
 
         if missing_vars:
@@ -52,8 +52,8 @@ class ConfigManager:
     
     @property
     def base_url(self) -> str:
-        """获取API基础地址。"""
-        return os.getenv("BASE_URL", "无地址")
+        """获取对话 API 基础地址。"""
+        return os.getenv("BASE_URL", "https://api.302.ai/v1")
 
     @property
     def model(self) -> str:
@@ -90,11 +90,6 @@ class ConfigManager:
     # --- 搜索API配置 ---
 
     @property
-    def search_api_key(self) -> str:
-        """获取搜索API密钥。"""
-        return os.getenv("SEARCH_API_KEY", "")
-
-    @property
     def search_api_url(self) -> str:
-        """获取搜索API地址。"""
+        """获取搜索 API 地址。"""
         return os.getenv("SEARCH_API_URL", "https://api.302.ai/search1api/search")
