@@ -73,51 +73,65 @@ class WeatherTool(BaseTool):
 
         logger.info(f"使用外部搜索API进行天气查询，URL: {self.search_api_url}")
 
-    def _call_search_api(self, area_name: str) -> Optional[dict]:
+    def _call_search_api(self, area_name: str, max_retries: int = 3) -> Optional[dict]:
         """
-        调用外部搜索API获取天气信息
+        调用外部搜索API获取天气信息 (支持自动重试)
 
         Args:
             area_name: 地区名称
+            max_retries: 最大重试次数 (默认3次)
 
         Returns:
             搜索结果字典，失败返回 None
         """
-        try:
-            # 使用固定的搜索 URL
-            url = self.search_api_url
+        import time
 
-            # 优先使用传入的 Key，其次使用配置文件的 Key
-            api_key = self.search_api_key or self.config.search_api_key
+        # 使用固定的搜索 URL
+        url = self.search_api_url
 
-            headers = {
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "query": f"{area_name}天气"
-            }
+        # 优先使用传入的 Key，其次使用配置文件的 Key
+        api_key = self.search_api_key or self.config.search_api_key
 
-            logger.info(f"🔍 调用搜索API查询 '{area_name}' 的天气...")
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "query": f"{area_name}天气"
+        }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=30)
-            response.raise_for_status()
+        # 重试循环 (指数退避)
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(f"🔍 调用搜索API查询 '{area_name}' 的天气... (尝试 {attempt}/{max_retries})")
 
-            result = response.json()
-            logger.info(f"✅ 搜索API返回成功")
+                response = requests.post(url, headers=headers, json=payload, timeout=30)
+                response.raise_for_status()
 
-            return result
+                result = response.json()
+                logger.info(f"✅ 搜索API返回成功")
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"❌ 调用搜索API失败: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"❌ 处理搜索结果时出错: {e}", exc_info=True)
-            return None
+                return result
+
+            except requests.exceptions.RequestException as e:
+                wait_time = 2 ** (attempt - 1)  # 指数退避: 1s, 2s, 4s
+                if attempt < max_retries:
+                    logger.warning(f"⚠️ 调用搜索API失败 (尝试 {attempt}/{max_retries}): {e}")
+                    logger.info(f"⏳ 等待 {wait_time} 秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"❌ 调用搜索API最终失败 (已重试 {max_retries} 次): {e}")
+                    return None
+
+            except Exception as e:
+                logger.error(f"❌ 处理搜索结果时出错: {e}", exc_info=True)
+                return None
+
+        return None
 
     def _extract_weather_code_from_url(self, url: str) -> Optional[str]:
         """
-        从中国天气网URL中提取天气编码
+        从中国天气网URL中提取天气编码 (支持多种格式)
 
         Args:
             url: 中国天气网的URL，如 https://www.weather.com.cn/weather/101281001.shtml
@@ -126,10 +140,23 @@ class WeatherTool(BaseTool):
             9位数字天气编码，未找到返回 None
         """
         import re
-        # 匹配 weather.com.cn/weather/数字.shtml 格式
-        match = re.search(r'weather\.com\.cn/weather/(\d{9})\.shtml', url)
-        if match:
-            return match.group(1)
+        # 尝试多种正则模式，提高鲁棒性
+        patterns = [
+            r'weather\.com\.cn/weather/(\d{9})\.shtml',  # 标准格式
+            r'weather\.com\.cn/w/(\d{9})',                # 简化格式
+            r'weather\.com\.cn/.*?/(\d{9})',              # 通用格式
+            r'/(\d{9})\.shtml',                           # 宽松匹配
+            r'[/=](\d{9})(?:[/\?&#]|$)',                 # 参数格式
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                code = match.group(1)
+                logger.debug(f"✅ 提取到天气编码: {code} (模式: {pattern})")
+                return code
+
+        logger.warning(f"⚠️ 无法从 URL 提取天气编码: {url}")
         return None
 
     def _parse_weather_with_llm(self, area_name: str, search_result: dict) -> Optional[dict]:

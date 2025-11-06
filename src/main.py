@@ -28,29 +28,65 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY_TURNS = 5
 CACHE_KEY = "getweather-assistant-v2.1"
 TEMPERATURE = 0.7
-MAX_ITERATIONS = 5
+MAX_ITERATIONS = 8  # 从 5 增加到 8，支持更复杂的查询
 
 SYSTEM_PROMPT = """你是智能天气助手"小天"，专注于提供准确的天气信息和贴心服务。
 
-🎯 工具使用原则：
+🎯 **场景识别与工具选择 (重要!)**
 
-1. **普通对话** → 直接回答，不调用工具
-   示例："你好"、"你是谁"、"谢谢"
+📌 场景 1: 普通对话 → 不调用任何工具
+识别特征: 问候、感谢、闲聊、询问身份
+✅ 正例:
+  - "你好" → 直接回答: "你好! 我是小天..."
+  - "谢谢" → 直接回答: "不客气!..."
+  - "你是谁" → 直接回答: "我是智能天气助手小天..."
+❌ 反例:
+  - "你好" → ❌ 不要调用任何工具
+  - "谢谢" → ❌ 不要查询数据库
 
-2. **天气查询** → 优先复用历史数据，必要时调用 weather_query
-   - 历史中已有天气数据 → 直接使用历史回答追问
-   - 新地区或无历史数据 → 调用 weather_query 工具
+📌 场景 2: 天气查询 → 调用 weather_query 工具
+识别特征: 包含"天气"、"温度"、"下雨"、"气温"等关键词 + 地名
+✅ 正例:
+  - "北京天气怎么样?" → 调用 weather_query(area_name="北京")
+  - "上海会下雨吗?" → 调用 weather_query(area_name="上海")
+  - "深圳今天气温多少?" → 调用 weather_query(area_name="深圳")
 
-3. **数据库查询** → 使用 SQL 工具（省份必须用 LIKE 模糊匹配）
-   示例："广东有哪些地级市？"
-   SQL: SELECT region FROM weather_regions WHERE province LIKE '%广东%' AND region_type='地级市'
+🔄 上下文引用处理:
+  - "那上海呢?" (前一轮问了北京天气) → 调用 weather_query(area_name="上海")
+  - "广州的呢?" (前一轮问了天气) → 调用 weather_query(area_name="广州")
 
-💡 交互原则：
-- 自然友好，简洁明了
-- 温度使用℃符号
-- 理解上下文引用（记住最近5轮对话）
-- 不要过度使用工具，优先复用历史数据
-- 数据库查询结果用清晰语言总结"""
+⚡ 优化策略:
+  - 如果最近 2 轮内已查询过该地区天气 → 直接引用历史回答
+  - 否则 → 调用 weather_query 工具
+
+📌 场景 3: 数据库查询 → 调用 SQL 工具
+识别特征: 统计、列出、查询地区数量/类型，不涉及天气
+✅ 正例:
+  - "有多少个直辖市?" → sql_db_query("SELECT COUNT(*) FROM weather_regions WHERE region_type='直辖市'")
+  - "广东省有哪些地级市?" → sql_db_query("SELECT region FROM weather_regions WHERE province LIKE '%广东%' AND region_type='地级市'")
+  - "列出所有省会城市" → sql_db_query("SELECT region FROM weather_regions WHERE region_type='省会城市'")
+
+⚠️ SQL 安全规则:
+  - 省份/地区名称必须用 LIKE 模糊匹配: province LIKE '%广东%'
+  - 只执行 SELECT 查询，禁止 INSERT/UPDATE/DELETE
+  - 查询结果用自然语言总结，不要直接输出原始数据
+
+💡 **效率优先原则**
+1. 优先复用最近 2 轮内的历史数据
+2. 单次对话工具调用不超过 3 次
+3. 如果 3 次调用后仍无法回答 → 礼貌告知用户并建议换个问法
+
+💡 **交互规范**
+- 自然友好，简洁明了 (避免冗长解释)
+- 温度统一使用℃符号
+- 理解上下文引用 (记住最近对话)
+- 数据库查询结果用清晰语言总结
+
+❌ **禁止行为**
+- 不要为普通对话调用工具 (浪费资源)
+- 不要重复查询已有的天气数据 (检查历史)
+- 不要执行非 SELECT 的 SQL 语句 (安全风险)
+- 不要输出原始 SQL 语句给用户 (用户体验差)"""
 
 
 class DialogueService:
@@ -125,7 +161,10 @@ class DialogueService:
 
     def run_conversation(self, user_input: str, chat_history: List[Tuple[str, str]] = None) -> str:
         try:
-            history_messages = self._convert_history(chat_history)
+            # 智能压缩历史记录，减少 Token 消耗
+            compressed_history = self._compress_history(chat_history)
+            history_messages = self._convert_history(compressed_history)
+
             response = self.agent_executor.invoke({
                 "input": user_input,
                 "chat_history": history_messages,
@@ -135,6 +174,55 @@ class DialogueService:
         except Exception as e:
             logger.error(f"对话失败: {e}", exc_info=True)
             return "对不起，我在处理您的请求时遇到了问题。请稍后再试。"
+
+    @staticmethod
+    def _compress_history(chat_history: List[Tuple[str, str]]) -> List[Tuple[str, str]]:
+        """
+        智能压缩历史记录，优先保留重要上下文
+
+        策略:
+        1. 保留最近 2 轮完整对话 (用于上下文引用)
+        2. 之前的对话进行摘要压缩 (只保留关键信息)
+        3. 过滤掉无关对话 (问候、感谢等)
+
+        Returns:
+            压缩后的历史记录
+        """
+        if not chat_history or len(chat_history) <= 2:
+            return chat_history  # 少于 2 轮，直接返回
+
+        # 无关对话关键词 (用于过滤)
+        trivial_keywords = ["你好", "谢谢", "再见", "不客气", "没事", "好的", "嗯", "哦"]
+
+        # 分离最近 2 轮和历史对话
+        recent_history = chat_history[-2:]  # 最近 2 轮完整保留
+        old_history = chat_history[:-2]     # 之前的对话
+
+        # 压缩旧对话 (只保留重要的)
+        compressed_old = []
+        for user_msg, ai_msg in old_history:
+            # 过滤无关对话
+            if any(keyword in user_msg for keyword in trivial_keywords):
+                continue  # 跳过问候、感谢等
+
+            # 压缩冗长的回答 (保留前 100 字符)
+            if len(ai_msg) > 150:
+                ai_msg_compressed = ai_msg[:100] + "..."
+            else:
+                ai_msg_compressed = ai_msg
+
+            compressed_old.append((user_msg, ai_msg_compressed))
+
+        # 最多保留 2 轮压缩后的旧对话 + 2 轮完整的最近对话
+        max_old_turns = 2
+        if len(compressed_old) > max_old_turns:
+            compressed_old = compressed_old[-max_old_turns:]
+
+        # 合并: 压缩的旧对话 + 完整的最近对话
+        result = compressed_old + recent_history
+
+        logger.debug(f"📊 历史压缩: {len(chat_history)} 轮 → {len(result)} 轮 (节省 {len(chat_history) - len(result)} 轮)")
+        return result
 
     @staticmethod
     def _convert_history(chat_history: List[Tuple[str, str]]) -> List:

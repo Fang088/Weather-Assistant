@@ -93,3 +93,25 @@ class ConfigManager:
     def search_api_url(self) -> str:
         """获取搜索 API 地址。"""
         return os.getenv("SEARCH_API_URL", "https://api.302.ai/search1api/search")
+
+    # --- Redis缓存配置 ---
+
+    @property
+    def redis_host(self) -> str:
+        """获取 Redis 主机地址。"""
+        return os.getenv("REDIS_HOST", "localhost")
+
+    @property
+    def redis_port(self) -> int:
+        """获取 Redis 端口。"""
+        return int(os.getenv("REDIS_PORT", "6379"))
+
+    @property
+    def redis_db(self) -> int:
+        """获取 Redis 数据库编号。"""
+        return int(os.getenv("REDIS_DB", "0"))
+
+    @property
+    def redis_password(self) -> str:
+        """获取 Redis 密码（可选）。"""
+        return os.getenv("REDIS_PASSWORD", "")
