@@ -1,10 +1,9 @@
-
 import json
 import requests
 import re
-from langchain.tools import BaseTool
+from langchain_core.tools import BaseTool
 from typing import Optional, Type
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 from langchain_core.language_models import BaseChatModel
 import logging
 import sys
@@ -41,8 +40,7 @@ class WeatherTool(BaseTool):
     search_api_key: str = None  # 搜索 API Key（可选，优先使用）
     search_api_url: str = "https://api.302.ai/search1api/search"  # 固定搜索 URL
 
-    class Config:
-        arbitrary_types_allowed = True  # 允许自定义类型
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, search_api_key: str = None, search_api_url: str = None, **data):
         """

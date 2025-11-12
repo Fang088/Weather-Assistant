@@ -1,24 +1,22 @@
-# LangChain 核心库
-langchain>=0.1.0
-langchain-core>=0.1.0
-langchain-openai>=0.0.5
-langchain-community>=0.0.20  # 新增：包含 SQL Agent 和 SQLDatabase
+# LangChain & LangGraph - 最新版本 (2024+)
+langchain>=1.0.5
+langchain-core>=1.0.4
+langchain-openai>=1.0.2
+langchain-community>=0.4.1
 
 # 数据库
 pymysql>=1.1.0
-sqlalchemy>=2.0.0  # 新增：LangChain SQL 依赖 SQLAlchemy
+sqlalchemy>=2.0.0
 
 # 配置管理
 python-dotenv>=1.0.0
 
 # 数据验证
-pydantic>=2.0.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
 
-# HTTP 请求（保留以备将来扩展）
+# HTTP 请求
 requests>=2.31.0
-
-# 日志（Python内置，无需安装）
-# logging
 
 # FastAPI 和服务器
 fastapi>=0.109.0
@@ -26,4 +24,10 @@ uvicorn[standard]>=0.27.0
 
 # Redis 缓存（可选，不安装不影响基础功能）
 redis>=5.0.0
+
+# OpenAI SDK（最新版本）
+openai>=2.7.2
+
+# LLM 相关依赖
+tiktoken>=0.5.0
 

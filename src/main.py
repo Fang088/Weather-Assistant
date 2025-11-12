@@ -6,11 +6,11 @@ import os
 from typing import List, Tuple
 
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_tool_calling_agent, AgentExecutor
+from langchain_classic.agents import create_tool_calling_agent, AgentExecutor
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_community.tools.sql_database.tool import (
-    QuerySQLDataBaseTool,
+    QuerySQLDatabaseTool,
     InfoSQLDatabaseTool,
     ListSQLDatabaseTool,
 )
@@ -135,7 +135,7 @@ class DialogueService:
         # SQL 工具
         db_instance = self.sql_db.get_db_instance()
         tools.extend([
-            QuerySQLDataBaseTool(db=db_instance),
+            QuerySQLDatabaseTool(db=db_instance),
             InfoSQLDatabaseTool(db=db_instance),
             ListSQLDatabaseTool(db=db_instance),
         ])

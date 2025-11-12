@@ -100,18 +100,12 @@ CREATE TABLE weather_regions (
 
 ### Windows (CMD)
 ```cmd
-curl -X POST http://localhost:6666/Fang-GetWeather/chat ^
-  -H "Content-Type: application/json" ^
-  -H "Authorization: Bearer sk-your-api-key" ^
-  -d "{\"message\":\"北京天气\"}"
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-api-key" -d "{\"message\":\"北京天气\"}"
 ```
 
 ### Linux / macOS
 ```bash
-curl -X POST http://localhost:6666/Fang-GetWeather/chat \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-your-api-key" \
-  -d '{"message":"北京天气"}'
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -H "Authorization: Bearer sk-your-api-key" -d '{"message":"北京天气"}'
 ```
 
 ### 会话记忆（带 session_id）
@@ -119,27 +113,19 @@ curl -X POST http://localhost:6666/Fang-GetWeather/chat \
 #### Windows (CMD)
 ```cmd
 REM 第一轮
-curl -X POST http://localhost:6666/Fang-GetWeather/chat ^
-  -H "Content-Type: application/json" ^
-  -d "{\"message\":\"北京天气\"}"
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -d "{\"message\":\"北京天气\"}"
 
 REM 第二轮（带上 session_id）
-curl -X POST http://localhost:6666/Fang-GetWeather/chat ^
-  -H "Content-Type: application/json" ^
-  -d "{\"message\":\"那上海的呢?\",\"session_id\":\"abc123...\"}"
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -d "{\"message\":\"那上海的呢?\",\"session_id\":\"abc123...\"}"
 ```
 
 #### Linux / macOS
 ```bash
 # 第一轮
-curl -X POST http://localhost:6666/Fang-GetWeather/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"北京天气"}'
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -d '{"message":"北京天气"}'
 
 # 第二轮（带上 session_id）
-curl -X POST http://localhost:6666/Fang-GetWeather/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message":"那上海的呢?","session_id":"abc123..."}'
+curl -X POST http://localhost:6666/Fang-GetWeather/chat -H "Content-Type: application/json" -d '{"message":"那上海的呢?","session_id":"abc123..."}'
 ```
 
 ---
